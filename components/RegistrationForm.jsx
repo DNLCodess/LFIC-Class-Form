@@ -109,17 +109,17 @@ export default function RegistrationForm({ onComplete, setIsLoading }) {
     >
       {/* Header */}
       <motion.div variants={itemVariants} className="text-center mb-12">
-        <div className="mx-auto mb-6 bg-gradient-to-r from-emerald-500 to-orange-500 rounded-2xl flex items-center justify-center">
+        <div className="mx-auto mb-6 bg-gray-200 rounded-2xl flex items-center justify-center">
           <Image
             src="/logo.png"
-            alt="LFIC Logo"
+            alt="LAFIC Logo"
             width={96} // adjust logo width here
             height={96} // adjust logo height here
             className="rounded-xl object-contain"
             priority
           />
         </div>
-        <h1 className="text-4xl font-bold text-gradient mb-4">
+        <h1 className="text-4xl font-bold text-green-500 mb-4">
           Lanky First Ideal Creativity
         </h1>
         <p className="text-xl text-gray-600 mb-2">

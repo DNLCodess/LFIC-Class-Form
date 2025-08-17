@@ -13,28 +13,29 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { toast } from "react-hot-toast";
+import { supabase } from "../lib/supabase"; // ⬅️ NEW: Supabase client
 
 export default function PaymentPage({ userData, onComplete, setIsLoading }) {
   const [paymentConfig, setPaymentConfig] = useState(null);
   const [error, setError] = useState(null);
 
-  // Function to sanitize customer data
+  // Sanitize customer data for Flutterwave
   const sanitizeCustomerData = (data) => {
     return {
-      email: data.email || "",
-      phone_number: data.phone || "",
-      name: `${data.firstname || ""} ${data.surname || ""}`.trim(),
-      id: data.id ? data.id.toString().replace(/\./g, "_") : undefined,
+      email: data?.email || "",
+      phone_number: data?.phone || "",
+      name: `${data?.firstname || ""} ${data?.surname || ""}`.trim(),
+      id: data?.id ? String(data.id).replace(/\./g, "_") : undefined,
     };
   };
 
+  // Build Flutterwave config from incoming userData
   useEffect(() => {
-    // Initialize Flutterwave configuration with sanitized data
     const config = {
       public_key:
         process.env.NEXT_PUBLIC_FLUTTERWAVE_PUBLIC_KEY ||
         "FLWPUBK_TEST-SANDBOXDEMOKEY-X",
-      tx_ref: Date.now().toString(),
+      tx_ref: `LFIC_${Date.now()}`,
       amount: 3000,
       currency: "NGN",
       payment_options: "card,mobilemoney,ussd",
@@ -42,7 +43,7 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
       customizations: {
         title: "Lanky First Ideal Creativity",
         description: "Graphic Design Class Payment",
-        logo: "https://your-logo-url.com/logo.png",
+        logo: "/logo.png",
       },
       meta: {
         __disableProblematicEventTracking: true,
@@ -53,25 +54,39 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
 
   const handleFlutterPayment = useFlutterwave(paymentConfig || {});
 
-  const storeUserData = async (data) => {
-    try {
-      const response = await fetch("/api/store-user-data", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(data),
-      });
+  // 🔄 Replaces the old Google Sheets saving: insert into Supabase on success
+  const insertRegistration = async (payload) => {
+    // Map camelCase from form -> snake_case table columns
+    const row = {
+      surname: payload.surname || null,
+      middlename: payload.middlename || null,
+      firstname: payload.firstname || null,
+      dob: payload.dob || null,
+      gender: payload.gender || null,
+      email: payload.email || null,
+      phone: payload.phone || null,
+      address: payload.address || null,
+      computing_knowledge:
+        (payload.computingKnowledge || "").toLowerCase() || null,
+      has_computer: (payload.hasComputer || "").toLowerCase() || null,
+      using_phone: (payload.usingPhone || "").toLowerCase() || null,
+      attestation_accepted: Boolean(
+        payload.attestationAccepted ?? payload.attestation_accepted
+      ),
+      submission_date:
+        payload.submissionDate ||
+        payload.submission_date ||
+        new Date().toISOString(),
 
-      if (!response.ok) {
-        throw new Error("Failed to store user data");
-      }
+      // Payment details
+      payment_reference: payload.paymentReference || null,
+      payment_status: payload.paymentStatus || null,
+      payment_date: payload.paymentDate || null,
+      transaction_id: payload.transactionId || null,
+    };
 
-      return await response.json();
-    } catch (error) {
-      console.error("Error storing user data:", error);
-      throw error;
-    }
+    const { error } = await supabase.from("registrations").insert([row]);
+    if (error) throw error;
   };
 
   const handlePayment = () => {
@@ -93,44 +108,48 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
       callback: async (response) => {
         closePaymentModal();
 
-        // Sanitize the response data
+        // Normalize the callback data
         const sanitizedResponse = {
-          ...response,
-          customer: response.customer
-            ? sanitizeCustomerData(response.customer)
-            : undefined,
+          status: response?.status,
+          tx_ref: response?.tx_ref,
+          transaction_id: response?.transaction_id,
         };
 
-        // Handle both "successful" and "completed" statuses
         if (
           sanitizedResponse.status === "successful" ||
           sanitizedResponse.status === "completed"
         ) {
-          setIsLoading(true);
-          toast.success("Payment successful! Processing...");
-
           try {
-            await storeUserData({
+            setIsLoading?.(true);
+            toast.success("Payment successful! Processing...");
+
+            // Build payload for Supabase
+            const payload = {
               ...userData,
               paymentReference: sanitizedResponse.tx_ref,
               paymentStatus: "completed",
               paymentDate: new Date().toISOString(),
               transactionId: sanitizedResponse.transaction_id,
-            });
+            };
+
+            await insertRegistration(payload);
 
             toast.success("Registration confirmed!");
-            onComplete({
+            onComplete?.({
               transactionId: sanitizedResponse.transaction_id,
               reference: sanitizedResponse.tx_ref,
               status: sanitizedResponse.status,
             });
-          } catch (error) {
-            console.error("Error storing user data:", error);
+          } catch (e) {
+            console.error("Supabase insert error:", e);
+            setError(
+              "Payment successful but registration failed. Please contact support."
+            );
             toast.error(
               "Payment successful but registration failed. Please contact support."
             );
           } finally {
-            setIsLoading(false);
+            setIsLoading?.(false);
           }
         } else {
           const message = `Payment not completed. Status: ${sanitizedResponse.status}`;
@@ -141,23 +160,22 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
       onClose: () => {
         toast("Payment was not completed", { icon: "ℹ️" });
       },
-      onError: (error) => {
-        console.error("Flutterwave error:", error);
-        setError(`Payment error: ${error.message}`);
-        toast.error(`Payment error: ${error.message}`);
+      onError: (err) => {
+        console.error("Flutterwave error:", err);
+        const msg = `Payment error: ${err?.message || "Unknown error"}`;
+        setError(msg);
+        toast.error(msg);
       },
     });
   };
 
+  // Animations (kept exactly as you had)
   const containerVariants = {
     hidden: { opacity: 0, y: 20 },
     visible: {
       opacity: 1,
       y: 0,
-      transition: {
-        duration: 0.6,
-        staggerChildren: 0.1,
-      },
+      transition: { duration: 0.6, staggerChildren: 0.1 },
     },
   };
 
@@ -217,7 +235,8 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
               <div>
                 <p className="text-sm text-gray-600">Full Name</p>
                 <p className="font-medium">
-                  {userData.firstname} {userData.middlename} {userData.surname}
+                  {userData?.firstname} {userData?.middlename}{" "}
+                  {userData?.surname}
                 </p>
               </div>
             </div>
@@ -226,7 +245,7 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
               <Mail className="w-5 h-5 text-orange-500 mr-3" />
               <div>
                 <p className="text-sm text-gray-600">Email</p>
-                <p className="font-medium">{userData.email}</p>
+                <p className="font-medium">{userData?.email}</p>
               </div>
             </div>
 
@@ -234,7 +253,7 @@ export default function PaymentPage({ userData, onComplete, setIsLoading }) {
               <Phone className="w-5 h-5 text-emerald-500 mr-3" />
               <div>
                 <p className="text-sm text-gray-600">Phone</p>
-                <p className="font-medium">{userData.phone}</p>
+                <p className="font-medium">{userData?.phone}</p>
               </div>
             </div>
           </div>
